@@ -97,6 +97,7 @@ import { GoogleGenAI } from "@google/genai";
 import { NextResponse } from "next/server";
 
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
+const MAX_IMAGES = 5;
 
 const allowedTypes = [
     "image/jpeg",
@@ -121,7 +122,7 @@ export async function POST(request: Request) {
         const style = formData.get("style");
         const budget = formData.get("budget");
         const requirements = formData.get("requirements");
-        const image = formData.get("image");
+        const images = formData.getAll("image");
 
         if (
             typeof roomType !== "string" ||
@@ -151,41 +152,56 @@ export async function POST(request: Request) {
             );
         }
 
-        if (!(image instanceof File) || image.size === 0) {
+        if (
+            images.length === 0 ||
+            images.length > MAX_IMAGES
+        ) {
             return NextResponse.json(
-                { error: "Please upload a room photo." },
+                { error: "Please upload between one and five room photos." },
                 { status: 400 }
             );
         }
 
-        if (!allowedTypes.includes(image.type)) {
+        const imageFiles = images.filter(
+            (image): image is File => image instanceof File && image.size > 0
+        );
+
+        if (imageFiles.length !== images.length) {
             return NextResponse.json(
-                { error: "Upload a JPG, PNG, or WebP image." },
+                { error: "Please upload valid room photo files." },
                 { status: 400 }
             );
         }
 
-        if (image.size > MAX_IMAGE_SIZE) {
+        if (imageFiles.some((image) => !allowedTypes.includes(image.type))) {
             return NextResponse.json(
-                { error: "Image size must be 5 MB or less." },
+                { error: "Upload JPG, PNG, or WebP images only." },
                 { status: 400 }
             );
         }
 
-        const bytes = await image.arrayBuffer();
-        const base64Image = Buffer.from(bytes).toString("base64");
+        if (imageFiles.some((image) => image.size > MAX_IMAGE_SIZE)) {
+            return NextResponse.json(
+                { error: "Each image must be 5 MB or less." },
+                { status: 400 }
+            );
+        }
+
+        const imageContents = await Promise.all(
+            imageFiles.map(async (image) => ({
+                inlineData: {
+                    mimeType: image.type,
+                    data: Buffer.from(await image.arrayBuffer()).toString("base64"),
+                },
+            }))
+        );
 
         const ai = new GoogleGenAI({ apiKey });
 
         const response = await ai.models.generateContent({
             model: "gemini-3.8-flash",
             contents: [
-                {
-                    inlineData: {
-                        mimeType: image.type,
-                        data: base64Image,
-                    },
-                },
+                ...imageContents,
                 {
                     text: `
             You are a professional interior design assistant.
